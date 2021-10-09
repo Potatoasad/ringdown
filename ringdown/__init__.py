@@ -39,3 +39,5 @@ rcParams['legend.fontsize'] = fs
 rcParams['xtick.labelsize'] = fs_label
 rcParams['ytick.labelsize'] = fs_label
 rcParams["text.usetex"] = "true"
+
+print("This is the new charged ringdown version -- beware!")

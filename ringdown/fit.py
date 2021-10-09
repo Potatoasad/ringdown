@@ -107,6 +107,7 @@ class Fit(object):
         return self._compiled_models[self.model]
 
     def compile(self, verbose=False, force=False):
+        print("Inside compile")
         if force or self.model not in self._compiled_models:
             # compile model and cache in class variable
             code = pkg_resources.resource_string(__name__,
@@ -282,6 +283,7 @@ class Fit(object):
 
         additional kwargs are passed to pystan.model.sampling
         """
+        print("inside run")
         # get model input
         stan_data = self.model_input
         stan_data['only_prior'] = int(prior)
