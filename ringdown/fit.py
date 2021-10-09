@@ -114,6 +114,7 @@ class Fit(object):
             )
             import pystan
             kws = dict(model_code=code.decode("utf-8"))
+            print(code.decode("utf-8"))
             if not verbose:
                 kws['extra_compile_args'] = ["-w"]
             self._compiled_models[self.model] = pystan.StanModel(**kws)

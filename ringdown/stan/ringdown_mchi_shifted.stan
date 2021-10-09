@@ -47,6 +47,9 @@ data {
   real M_min;
   real M_max;
 
+  real dt_min;
+  real dt_max;
+
   real r2_qchi_min;
   real r2_qchi_max;
 
@@ -54,10 +57,6 @@ data {
   real theta_qchi_max;
 
   real A_scale;
-
-  /* boolean arrays indicating whether to perturb n-th mode */
-  vector[nmode] perturb_f;
-  vector[nmode] perturb_tau;
 
   int flat_A_ellip;
   int only_prior;
@@ -68,6 +67,8 @@ parameters {
   real<lower=r2_qchi_min, upper=r2_qchi_max> r2_qchi;
   real<lower=theta_qchi_min, upper=theta_qchi_max> theta_qchi;
 
+  vector<lower=dt_min, upper=dt_max>[nobs-1] dts;
+
   vector[nmode] Apx_unit;
   vector[nmode] Apy_unit;
   vector[nmode] Acx_unit;
@@ -75,8 +76,8 @@ parameters {
 }
 
 transformed parameters {
-  real q 
-  real chi
+  real q; 
+  real chi;
   vector[nmode] gamma;
   vector[nmode] f;
   vector[nsamp] h_det_mode[nobs,nmode];
