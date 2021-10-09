@@ -47,11 +47,11 @@ data {
   real M_min;
   real M_max;
 
-  real r2_qchi_min
-  real r2_qchi_max
+  real r2_qchi_min;
+  real r2_qchi_max;
 
-  real theta_qchi_min
-  real theta_qchi_max
+  real theta_qchi_min;
+  real theta_qchi_max;
 
   real A_scale;
 
@@ -102,8 +102,8 @@ transformed parameters {
   }
 
   { 
-    q = r2_qchi*(sin(theta_qchi)^2)
-    chi = sqrt(r2_qchi)*(cos(theta_qchi))
+    q = r2_qchi*(sin(theta_qchi)^2);
+    chi = sqrt(r2_qchi)*(cos(theta_qchi));
   }
 
   {
@@ -169,7 +169,7 @@ generated quantities {
   vector[nmode] Q = pi() * f .* tau;
   vector[nmode] phiR;
   vector[nmode] phiL;
-  real Q_charge = sqrt(q)
+  real Q_charge = sqrt(q);
 
   for (i in 1:nmode) {
     phiR[i] = atan2(-Acx[i] + Apy[i], Acy[i] + Apx[i]);
