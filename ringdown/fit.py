@@ -314,6 +314,8 @@ class Fit(object):
     def pymc_model(self):
         if self.model == 'mchi':
             return model.make_mchi_model(**self.model_input)
+        elif self.model == 'mchiq':
+            return model.make_mchiq_model(**self.model_input)
         elif self.model == 'mchi_aligned':
             return model.make_mchi_aligned_model(**self.model_input)
         elif self.model == 'ftau':
