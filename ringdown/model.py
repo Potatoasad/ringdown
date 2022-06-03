@@ -169,6 +169,8 @@ def make_mchiq_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs, df_co
     r2_qchi_max = kwargs.pop("r2_qchi_max")
     theta_qchi_min = kwargs.pop("theta_qchi_min")
     theta_qchi_max = kwargs.pop("theta_qchi_max")
+    chi_min = sqrt(r2_qchi_min)*cos(theta_qchi_max)
+    chi_max = sqrt(r2_qchi_max)*cos(theta_qchi_min)
     flat_A = kwargs.pop("flat_A", True)
     flat_A_ellip = kwargs.pop("flat_A_ellip", False)
 
