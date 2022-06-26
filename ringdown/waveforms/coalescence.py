@@ -1,4 +1,4 @@
-__all__ = ['Coalescence', 'Parameters']
+__all__ = ['Coalescence', 'Parameters', 'IMR']
 
 from pylab import *
 import lal
