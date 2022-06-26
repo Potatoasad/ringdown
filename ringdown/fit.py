@@ -22,7 +22,7 @@ from . import waveforms
 
 Target = namedtuple('Target', ['t0', 'ra', 'dec', 'psi'])
 
-MODELS = ('ftau', 'mchi', 'mchi_aligned', 'mchiq')
+MODELS = ('ftau', 'mchi', 'mchi_aligned', 'mchiq', 'mchiq_exact')
 
 class Fit(object):
     """ A ringdown fit. Contains all the information required to setup and run
@@ -231,6 +231,17 @@ class Fit(object):
                  flat_A=0,
                  flat_A_ellip=0
              ))
+        elif self.model == 'mchiq_exact':
+             default.update(dict(
+                 M_min=None,
+                 M_max=None,
+                 r2_qchi_min=0.0,
+                 r2_qchi_max=1.0,
+                 theta_qchi_min=0.0,
+                 theta_qchi_max=pi/2,
+                 flat_A=0,
+                 flat_A_ellip=0
+             ))
         return default
 
     @property
@@ -316,6 +327,8 @@ class Fit(object):
             return model.make_mchi_model(**self.model_input)
         elif self.model == 'mchiq':
             return model.make_mchiq_model(**self.model_input)
+        elif self.model == 'mchiq_exact':
+            return model.make_mchiq_exact_model(**self.model_input)
         elif self.model == 'mchi_aligned':
             return model.make_mchi_aligned_model(**self.model_input)
         elif self.model == 'ftau':
