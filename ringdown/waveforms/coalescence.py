@@ -1,14 +1,19 @@
 __all__ = ['Coalescence', 'Parameters', 'IMR']
 
+from warnings import warn
 from pylab import *
 import lal
+from ..data import *
 from .core import *
+from .peak import *
 from scipy.signal import tukey
 import lal
 import lalsimulation as ls
 from dataclasses import dataclass, asdict, fields
 import inspect
+import pandas as pd
 import h5py
+
 
 def docstring_parameter(*args, **kwargs):
     def dec(obj):
@@ -640,7 +645,7 @@ class IMR(Signal):
     _metadata = ['parameters','posterior_sample', 't_dict']
 
     def __init__(self, *args, posterior_sample=None, t_dict=None, **kwargs):
-        warnings.warn("IMR is deprecated; use Coalescence", warnings.DeprecationWarning)
+        warn("IMR is deprecated; use Coalescence", DeprecationWarning)
         if isinstance(posterior_sample,pd.DataFrame):
             posterior_sample = posterior_sample.squeeze().to_dict()
 
