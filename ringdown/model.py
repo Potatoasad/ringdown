@@ -57,10 +57,17 @@ def chi_factors(chi, coeffs):
 
     return at.dot(coeffs, v)
 
-def chiq_exact_factors(chi, Q, bij, cij, Y0):
-    chi_Q = np.array([[(chi**j) * (Q**i) for i in range(4)] for j in range(4)])
-    return [Y0[mode] * np.sum(bij[mode]*chi_Q) / np.sum(cij[mode]*chi_Q) for mode in range(len(bij))]
+#def chiq_exact_factors(chi, Q, bij, cij, Y0):
+#    chi_Q = np.array([[(chi**j) * (Q**i) for i in range(4)] for j in range(4)])
+#    return [Y0[mode] * np.sum(bij[mode]*chi_Q) / np.sum(cij[mode]*chi_Q) for mode in range(len(bij))]
 
+def chiq_exact_factors(chi, Q, Y0_bij, cij):
+    chi_Q = at.stack([[(chi**0) * (Q**0),(chi**0) * (Q**1),(chi**0) * (Q**2),(chi**0) * (Q**3)],
+                                     [(chi**1) * (Q**0),(chi**1) * (Q**1),(chi**1) * (Q**2),(chi**1) * (Q**3)],
+                                     [(chi**2) * (Q**0),(chi**2) * (Q**1),(chi**2) * (Q**2),(chi**2) * (Q**3)],
+                                     [(chi**3) * (Q**0),(chi**3) * (Q**1),(chi**3) * (Q**2),(chi**3) * (Q**3)]])
+    
+    return at.tensordot(Y0_bij, chi_Q,axes=[[1,2],[0,1]])/(at.tensordot(cij, chi_Q,axes=[[1,2],[0,1]]))
 
 def get_snr(h, d, L):
     wh = atl.solve_lower_triangular(L, h)
@@ -270,6 +277,12 @@ def make_mchiq_exact_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
     ndet = len(t0)
     nmode = f_coeffs.shape[0]
 
+    Y0_bij_omega = at.as_tensor_variable([Y0_omega[mode]*np.array(b_omega[mode]) for mode in range(len(b_omega))])
+    cij_omega = at.as_tensor_variable(c_omega)
+
+    Y0_bij_gamma = at.as_tensor_variable([Y0_gamma[mode]*np.array(b_gamma[mode]) for mode in range(len(b_gamma))])
+    cij_gamma = at.as_tensor_variable(c_gamma)
+
 
     with pm.Model() as model:
         pm.ConstantData('times', times)
@@ -298,8 +311,8 @@ def make_mchiq_exact_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
         ellip = pm.Deterministic("ellip", (at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) - at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))) / (at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) + at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))))
 
         f0 = FREF*MREF/M
-        f = pm.Deterministic("f", f0*(chiq_exact_factors(chi, Q_charge, b_omega, c_omega, Y0_omega)))
-        gamma = pm.Deterministic("gamma", f0*(chiq_exact_factors(chi, Q_charge, b_gamma, c_gamma, Y0_gamma)))
+        f = pm.Deterministic("f", (f0/(2*np.pi))*(chiq_exact_factors(chi, Q_charge, Y0_bij_omega, cij_omega)))
+        gamma = pm.Deterministic("gamma", f0*(chiq_exact_factors(chi, Q_charge, Y0_bij_gamma, cij_gamma)))
         tau = pm.Deterministic("tau", 1/gamma)
         Q = pm.Deterministic("Q", np.pi * f * tau)
         phiR = pm.Deterministic("phiR", at.arctan2(-Acx + Apy, Acy + Apx))
