@@ -19,6 +19,7 @@ import pymc as pm
 from . import qnms
 import warnings
 from . import waveforms
+from .coefficients.charged_coefficients import interpolation_coeffs
 
 Target = namedtuple('Target', ['t0', 'ra', 'dec', 'psi'])
 
@@ -314,6 +315,9 @@ class Fit(object):
                 g_coeffs=g_coeff,
             ))
 
+        if 'q_exact' in self.model:
+            input.update(interpolation_coeffs)
+
         input.update(self.prior_settings)
 
         for k, v in input.items():
@@ -328,7 +332,7 @@ class Fit(object):
         elif self.model == 'mchiq':
             return model.make_mchiq_model(**self.model_input)
         elif self.model == 'mchiq_exact':
-            return model.make_mchiq_exact_model(**self.model_input)
+                return model.make_mchiq_exact_model(**self.model_input)
         elif self.model == 'mchi_aligned':
             return model.make_mchi_aligned_model(**self.model_input)
         elif self.model == 'ftau':
