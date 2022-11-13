@@ -1,4 +1,4 @@
-__all__ = ['make_mchi_model', 'make_mchi_aligned_model', 'make_ftau_model']
+__all__ = ['make_mchi_model', 'make_mchi_aligned_model', 'make_ftau_model', 'make_mchiq_exact_model', 'make_mchiq_model']
 
 import aesara.tensor as at
 import aesara.tensor.slinalg as atl
@@ -54,6 +54,18 @@ def chi_factors(chi, coeffs):
     v = at.stack([chi, at.as_tensor_variable(1.0), log1mc, log1mc2,
                   log1mc3, log1mc4])
     return at.dot(coeffs, v)
+
+#def chiq_exact_factors(chi, Q, bij, cij, Y0):
+#    chi_Q = np.array([[(chi**j) * (Q**i) for i in range(4)] for j in range(4)])
+#    return [Y0[mode] * np.sum(bij[mode]*chi_Q) / np.sum(cij[mode]*chi_Q) for mode in range(len(bij))]
+
+def chiq_exact_factors(chi, Q, Y0_bij, cij):
+    chi_Q = at.stack([[(chi**0) * (Q**0),(chi**0) * (Q**1),(chi**0) * (Q**2),(chi**0) * (Q**3)],
+                                     [(chi**1) * (Q**0),(chi**1) * (Q**1),(chi**1) * (Q**2),(chi**1) * (Q**3)],
+                                     [(chi**2) * (Q**0),(chi**2) * (Q**1),(chi**2) * (Q**2),(chi**2) * (Q**3)],
+                                     [(chi**3) * (Q**0),(chi**3) * (Q**1),(chi**3) * (Q**2),(chi**3) * (Q**3)]])
+    
+    return at.tensordot(Y0_bij, chi_Q,axes=[[1,2],[0,1]])/(at.tensordot(cij, chi_Q,axes=[[1,2],[0,1]]))
 
 def get_snr(h, d, L):
     wh = atl.solve_lower_triangular(L, h)
@@ -223,6 +235,177 @@ def make_mchi_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
                 key = key.decode('utf-8')
             _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
                             observed=strains[i], dims=['time_index'])
+        
+        return model
+
+def make_mchiq_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs, df_coeffs, dg_coeffs,
+                    **kwargs):
+    M_min = kwargs.pop("M_min")
+    M_max = kwargs.pop("M_max")
+    A_scale = kwargs.pop("A_scale")
+    r2_qchi_min = kwargs.pop("r2_qchi_min")
+    r2_qchi_max = kwargs.pop("r2_qchi_max")
+    theta_qchi_min = kwargs.pop("theta_qchi_min")
+    theta_qchi_max = kwargs.pop("theta_qchi_max")
+    chi_min = np.sqrt(r2_qchi_min)*np.cos(theta_qchi_max)
+    chi_max = np.sqrt(r2_qchi_max)*np.cos(theta_qchi_min)
+    flat_A = kwargs.pop("flat_A", True)
+    flat_A_ellip = kwargs.pop("flat_A_ellip", False)
+
+    if flat_A and flat_A_ellip:
+        raise ValueError("at most one of `flat_A` and `flat_A_ellip` can be `True`")
+    if (chi_min < 0) or (chi_max > 1):
+        raise ValueError("chi boundaries must be contained in [0, 1)")
+
+    ndet = len(t0)
+    nmode = f_coeffs.shape[0]
+
+
+    with pm.Model() as model:
+        pm.ConstantData('times', times)
+        pm.ConstantData('t0', t0)
+        pm.ConstantData('L', Ls)
+
+        M = pm.Uniform("M", M_min, M_max)
+        r2_qchi = pm.Uniform("r2_qchi", r2_qchi_min, r2_qchi_max)
+        theta_qchi = pm.Uniform("theta_qchi", theta_qchi_min, theta_qchi_max)
+
+        q        = pm.Deterministic("q",        r2_qchi*(at.sin(theta_qchi)**2))
+        Q_charge = pm.Deterministic("Q_charge", at.sqrt(q))
+        chi      = pm.Deterministic("chi",      at.sqrt(r2_qchi)*(at.cos(theta_qchi)))
+
+        Apx_unit = pm.Flat("Apx_unit", shape=(nmode,))
+        Apy_unit = pm.Flat("Apy_unit", shape=(nmode,))
+        Acx_unit = pm.Flat("Acx_unit", shape=(nmode,))
+        Acy_unit = pm.Flat("Acy_unit", shape=(nmode,))
+
+        Apx = pm.Deterministic("Apx", A_scale*Apx_unit)
+        Apy = pm.Deterministic("Apy", A_scale*Apy_unit)
+        Acx = pm.Deterministic("Acx", A_scale*Acx_unit)
+        Acy = pm.Deterministic("Acy", A_scale*Acy_unit)
+
+        A = pm.Deterministic("A", 0.5*(at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) + at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))))
+        ellip = pm.Deterministic("ellip", (at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) - at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))) / (at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) + at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))))
+
+        f0 = FREF*MREF/M
+        f = pm.Deterministic("f", f0*(chi_factors(chi, f_coeffs) + q*chi_factors(chi, df_coeffs)))
+        gamma = pm.Deterministic("gamma", f0*(chi_factors(chi, g_coeffs) + q*chi_factors(chi, dg_coeffs)))
+        tau = pm.Deterministic("tau", 1/gamma)
+        Q = pm.Deterministic("Q", np.pi * f * tau)
+        phiR = pm.Deterministic("phiR", at.arctan2(-Acx + Apy, Acy + Apx))
+        phiL = pm.Deterministic("phiL", at.arctan2(-Acx - Apy, -Acy + Apx))
+        theta = pm.Deterministic("theta", -0.5*(phiR + phiL))
+        phi = pm.Deterministic("phi", 0.5*(phiR - phiL))
+
+        h_det_mode = pm.Deterministic("h_det_mode", compute_h_det_mode(t0, times, Fps, Fcs, f, gamma, Apx, Apy, Acx, Acy))
+        h_det = pm.Deterministic("h_det", at.sum(h_det_mode, axis=1))
+
+        # Priors:
+
+        # Flat in M-chi already
+
+        # Amplitude prior
+        if flat_A:
+            pm.Potential("flat_A_prior", -3*at.sum(at.log(A)))
+        elif flat_A_ellip:
+            pm.Potential("flat_A_ellip_prior", at.sum(-3*at.log(A) - at.log1m(at.square(ellip))))
+        else:
+            pm.Potential("gaussian_A_quadratures_prior", -0.5*at.sum(at.square(Apx_unit) + at.square(Apy_unit) + at.square(Acx_unit) + at.square(Acy_unit)))
+
+        # Flat prior on the delta-fs and delta-taus
+
+        # Likelihood:
+        for i in range(ndet):
+            _ = pm.MvNormal(f"strain_{i}", mu=h_det[i,:], chol=Ls[i], observed=strains[i])
+        
+        return model
+
+
+def make_mchiq_exact_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs, b_omega, c_omega, b_gamma, c_gamma, Y0_omega, Y0_gamma,
+                    **kwargs):
+    M_min = kwargs.pop("M_min")
+    M_max = kwargs.pop("M_max")
+    A_scale = kwargs.pop("A_scale")
+    r2_qchi_min = kwargs.pop("r2_qchi_min")
+    r2_qchi_max = kwargs.pop("r2_qchi_max")
+    theta_qchi_min = kwargs.pop("theta_qchi_min")
+    theta_qchi_max = kwargs.pop("theta_qchi_max")
+    chi_min = np.sqrt(r2_qchi_min)*np.cos(theta_qchi_max)
+    chi_max = np.sqrt(r2_qchi_max)*np.cos(theta_qchi_min)
+    flat_A = kwargs.pop("flat_A", True)
+    flat_A_ellip = kwargs.pop("flat_A_ellip", False)
+
+    if flat_A and flat_A_ellip:
+        raise ValueError("at most one of `flat_A` and `flat_A_ellip` can be `True`")
+    if (chi_min < 0) or (chi_max > 1):
+        raise ValueError("chi boundaries must be contained in [0, 1)")
+
+    ndet = len(t0)
+    nmode = f_coeffs.shape[0]
+
+    Y0_bij_omega = at.as_tensor_variable([Y0_omega[mode]*np.array(b_omega[mode]) for mode in range(len(b_omega))])
+    cij_omega = at.as_tensor_variable(c_omega)
+
+    Y0_bij_gamma = at.as_tensor_variable([Y0_gamma[mode]*np.array(b_gamma[mode]) for mode in range(len(b_gamma))])
+    cij_gamma = at.as_tensor_variable(c_gamma)
+
+
+    with pm.Model() as model:
+        pm.ConstantData('times', times)
+        pm.ConstantData('t0', t0)
+        pm.ConstantData('L', Ls)
+
+        M = pm.Uniform("M", M_min, M_max)
+        r2_qchi = pm.Uniform("r2_qchi", r2_qchi_min, r2_qchi_max)
+        theta_qchi = pm.Uniform("theta_qchi", theta_qchi_min, theta_qchi_max)
+
+        q        = pm.Deterministic("q",        r2_qchi*(at.sin(theta_qchi)**2))
+        Q_charge = pm.Deterministic("Q_charge", at.sqrt(q))
+        chi      = pm.Deterministic("chi",      at.sqrt(r2_qchi)*(at.cos(theta_qchi)))
+
+        Apx_unit = pm.Flat("Apx_unit", shape=(nmode,))
+        Apy_unit = pm.Flat("Apy_unit", shape=(nmode,))
+        Acx_unit = pm.Flat("Acx_unit", shape=(nmode,))
+        Acy_unit = pm.Flat("Acy_unit", shape=(nmode,))
+
+        Apx = pm.Deterministic("Apx", A_scale*Apx_unit)
+        Apy = pm.Deterministic("Apy", A_scale*Apy_unit)
+        Acx = pm.Deterministic("Acx", A_scale*Acx_unit)
+        Acy = pm.Deterministic("Acy", A_scale*Acy_unit)
+
+        A = pm.Deterministic("A", 0.5*(at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) + at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))))
+        ellip = pm.Deterministic("ellip", (at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) - at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))) / (at.sqrt(at.square(Acy + Apx) + at.square(Acx - Apy)) + at.sqrt(at.square(Acy - Apx) + at.square(Acx + Apy))))
+
+        f0 = FREF*MREF/M
+        f = pm.Deterministic("f", (f0/(2*np.pi))*(chiq_exact_factors(chi, Q_charge, Y0_bij_omega, cij_omega)))
+        gamma = pm.Deterministic("gamma", f0*(chiq_exact_factors(chi, Q_charge, Y0_bij_gamma, cij_gamma)))
+        tau = pm.Deterministic("tau", 1/gamma)
+        Q = pm.Deterministic("Q", np.pi * f * tau)
+        phiR = pm.Deterministic("phiR", at.arctan2(-Acx + Apy, Acy + Apx))
+        phiL = pm.Deterministic("phiL", at.arctan2(-Acx - Apy, -Acy + Apx))
+        theta = pm.Deterministic("theta", -0.5*(phiR + phiL))
+        phi = pm.Deterministic("phi", 0.5*(phiR - phiL))
+
+        h_det_mode = pm.Deterministic("h_det_mode", compute_h_det_mode(t0, times, Fps, Fcs, f, gamma, Apx, Apy, Acx, Acy))
+        h_det = pm.Deterministic("h_det", at.sum(h_det_mode, axis=1))
+
+        # Priors:
+
+        # Flat in M-chi already
+
+        # Amplitude prior
+        if flat_A:
+            pm.Potential("flat_A_prior", -3*at.sum(at.log(A)))
+        elif flat_A_ellip:
+            pm.Potential("flat_A_ellip_prior", at.sum(-3*at.log(A) - at.log1m(at.square(ellip))))
+        else:
+            pm.Potential("gaussian_A_quadratures_prior", -0.5*at.sum(at.square(Apx_unit) + at.square(Apy_unit) + at.square(Acx_unit) + at.square(Acy_unit)))
+
+        # Flat prior on the delta-fs and delta-taus
+
+        # Likelihood:
+        for i in range(ndet):
+            _ = pm.MvNormal(f"strain_{i}", mu=h_det[i,:], chol=Ls[i], observed=strains[i])
         
         return model
         

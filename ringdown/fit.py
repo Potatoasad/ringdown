@@ -19,6 +19,7 @@ import pymc as pm
 from . import qnms
 import warnings
 from . import waveforms
+from .coefficients.charged_coefficients import interpolation_coeffs
 
 def np2(x):
     """Returns the next power of two as big as or larger than x."""
@@ -29,7 +30,7 @@ def np2(x):
 
 Target = namedtuple('Target', ['t0', 'ra', 'dec', 'psi'])
 
-MODELS = ('ftau', 'mchi', 'mchi_aligned', 'mchiq')
+MODELS = ('ftau', 'mchi', 'mchi_aligned', 'mchiq', 'mchiq_exact')
 
 class Fit(object):
     """ A ringdown fit. Contains all the information required to setup and run
@@ -239,6 +240,17 @@ class Fit(object):
                  flat_A=0,
                  flat_A_ellip=0
              ))
+        elif self.model == 'mchiq_exact':
+             default.update(dict(
+                 M_min=None,
+                 M_max=None,
+                 r2_qchi_min=0.0,
+                 r2_qchi_max=1.0,
+                 theta_qchi_min=0.0,
+                 theta_qchi_max=pi/2,
+                 flat_A=0,
+                 flat_A_ellip=0
+             ))
         return default
 
     @property
@@ -324,6 +336,8 @@ class Fit(object):
             # serialize and compress properly
             input['modes'] = [bytes(f'{m.p}{m.l}{m.m}{m.n}', 'utf-8') for m in
                               self.modes]
+        if 'q_exact' in self.model:
+            input.update(interpolation_coeffs)
 
         input.update(self.prior_settings)
 
@@ -337,6 +351,10 @@ class Fit(object):
         if self._pymc_model is None:
             if self.model == 'mchi':
                 self._pymc_model = model.make_mchi_model(**self.model_input)
+            elif self.model == 'mchiq':
+                self._pymc_model = model.make_mchiq_model(**self.model_input)
+            elif self.model == 'mchiq_exact':
+                self._pymc_model = model.make_mchiq_exact_model(**self.model_input)
             elif self.model == 'mchi_aligned':
                 self._pymc_model = model.make_mchi_aligned_model(**self.model_input)
             elif self.model == 'ftau':
