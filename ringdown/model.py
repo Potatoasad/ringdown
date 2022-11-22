@@ -316,7 +316,12 @@ def make_mchiq_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs, df_co
 
         # Likelihood:
         for i in range(ndet):
-            _ = pm.MvNormal(f"strain_{i}", mu=h_det[i,:], chol=Ls[i], observed=strains[i])
+            key = ifos[i]
+            if isinstance(key, bytes):
+                # Don't want byte strings in our names!
+                key = key.decode('utf-8')
+            _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
+                            observed=strains[i], dims=['time_index'])
         
         return model
 
@@ -405,7 +410,12 @@ def make_mchiq_exact_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
 
         # Likelihood:
         for i in range(ndet):
-            _ = pm.MvNormal(f"strain_{i}", mu=h_det[i,:], chol=Ls[i], observed=strains[i])
+            key = ifos[i]
+            if isinstance(key, bytes):
+                # Don't want byte strings in our names!
+                key = key.decode('utf-8')
+            _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
+                            observed=strains[i], dims=['time_index'])
         
         return model
         
