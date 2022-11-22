@@ -258,7 +258,17 @@ def make_mchiq_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs, df_co
         raise ValueError("chi boundaries must be contained in [0, 1)")
 
     ndet = len(t0)
+    nt = len(times[0])
     nmode = f_coeffs.shape[0]
+
+    ifos = kwargs.pop('ifos', np.arange(ndet))
+    modes = kwargs.pop('modes', np.arange(nmode))
+
+    coords = {
+        'ifo': ifos,
+        'mode': modes,
+        'time_index': np.arange(nt)
+    }
 
 
     with pm.Model() as model:
@@ -346,7 +356,17 @@ def make_mchiq_exact_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
         raise ValueError("chi boundaries must be contained in [0, 1)")
 
     ndet = len(t0)
+    nt = len(times[0])
     nmode = f_coeffs.shape[0]
+
+    ifos = kwargs.pop('ifos', np.arange(ndet))
+    modes = kwargs.pop('modes', np.arange(nmode))
+
+    coords = {
+        'ifo': ifos,
+        'mode': modes,
+        'time_index': np.arange(nt)
+    }
 
     Y0_bij_omega = at.as_tensor_variable([Y0_omega[mode]*np.array(b_omega[mode]) for mode in range(len(b_omega))])
     cij_omega = at.as_tensor_variable(c_omega)
@@ -355,7 +375,7 @@ def make_mchiq_exact_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
     cij_gamma = at.as_tensor_variable(c_gamma)
 
 
-    with pm.Model() as model:
+    with pm.Model(coords=coords) as model:
         pm.ConstantData('times', times)
         pm.ConstantData('t0', t0)
         pm.ConstantData('L', Ls)
