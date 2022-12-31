@@ -22,7 +22,7 @@ setup(name='ringdown',
             'matplotlib',
             'numpy',
             'pandas',
-            'pymc',
+            'pymc==4',
             'qnm',
             'scipy',
             'seaborn']
