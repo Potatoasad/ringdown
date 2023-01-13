@@ -1,3 +1,5 @@
+import numpy as np
+
 """
 Fitting Coefficients have been taken from Carulo et.al (April 2022)
 https://arxiv.org/pdf/2109.13961.pdf
