@@ -56,3 +56,41 @@ interpolation_coeffs = {'b_omega': [b_omega_0, b_omega_1],
 						'Y0_gamma': Y0_gamma}
 
 
+b_omega = [b_omega_0, b_omega_1]
+b_gamma = [b_gamma_0, b_gamma_1]
+
+c_omega = [c_omega_0, c_omega_1]
+c_gamma = [c_gamma_0, c_gamma_1]
+
+Y0_bij_omega = np.array([Y0_omega[mode]*np.array(b_omega[mode]) for mode in range(len(b_omega))])
+cij_omega = np.array(c_omega)
+
+Y0_bij_gamma = np.array([Y0_gamma[mode]*np.array(b_gamma[mode]) for mode in range(len(b_gamma))])
+cij_gamma = np.array(c_gamma)
+
+def np_chiq_exact_factors(chi, Q, Y0_bij, cij):
+    chi_Q = np.stack([[(chi**0) * (Q**0),(chi**0) * (Q**1),(chi**0) * (Q**2),(chi**0) * (Q**3)],
+                                     [(chi**1) * (Q**0),(chi**1) * (Q**1),(chi**1) * (Q**2),(chi**1) * (Q**3)],
+                                     [(chi**2) * (Q**0),(chi**2) * (Q**1),(chi**2) * (Q**2),(chi**2) * (Q**3)],
+                                     [(chi**3) * (Q**0),(chi**3) * (Q**1),(chi**3) * (Q**2),(chi**3) * (Q**3)]])
+    
+    return np.tensordot(Y0_bij, chi_Q,axes=[[1,2],[0,1]])/(np.tensordot(cij, chi_Q,axes=[[1,2],[0,1]]))
+
+
+
+def get_charged_omega(chi,Q, Y0_bij_omega = Y0_bij_omega, Y0_bij_gamma = Y0_bij_gamma, cij_omega = cij_omega, cij_gamma = cij_gamma):
+    omega = np_chiq_exact_factors(chi, Q, Y0_bij_omega, cij_omega)
+    gamma = np_chiq_exact_factors(chi, Q, Y0_bij_gamma, cij_gamma)
+    return omega -1j*gamma
+
+def get_charged_ftau(M, chi,Q):
+    FREF = 2985.668287014743
+    MREF = 68.0
+    f0 = FREF*MREF/M
+    omegas = f0*get_charged_omega(chi,Q)
+    fs = np.array([np.real(omega)/(2*np.pi) for omega in omegas])
+    taus = np.array([-1/np.imag(omega) for omega in omegas])
+    return fs, taus
+
+
+
