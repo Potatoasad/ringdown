@@ -198,12 +198,15 @@ class Fit(object):
                 f_max=None,
                 f_min=None,
                 gamma_max=None,
-                gamma_min=None
+                gamma_min=None,
+                prior_run=False
             ))
         elif self.model == 'mchi':
             default.update(dict(
                 perturb_f=zeros(self.n_modes or 1),
                 perturb_tau=zeros(self.n_modes or 1),
+                df_min=-0.5,
+                dtau_min=-0.5,
                 df_max=0.5,
                 dtau_max=0.5,
                 M_min=None,
@@ -212,11 +215,16 @@ class Fit(object):
                 chi_max=0.99,
                 flat_A=0,
                 flat_A_ellip=0,
+                f_min=0.0,
+                f_max=np.inf,
+                prior_run=False
             ))
         elif self.model == 'mchi_aligned':
             default.update(dict(
                 perturb_f=zeros(self.n_modes or 1),
                 perturb_tau=zeros(self.n_modes or 1),
+                df_min=-0.5,
+                dtau_min=-0.5,
                 df_max=0.5,
                 dtau_max=0.5,
                 M_min=None,
@@ -225,7 +233,10 @@ class Fit(object):
                 chi_max=0.99,
                 cosi_min=-1,
                 cosi_max=1,
-                flat_A=0
+                flat_A=0,
+                f_min=0.0,
+                f_max=np.inf,
+                prior_run=False
             ))
         elif self.model == 'mchiq':
              default.update(dict(
@@ -238,7 +249,10 @@ class Fit(object):
                  df_coeffs=[],
                  dg_coeffs=[],
                  flat_A=0,
-                 flat_A_ellip=0
+                 flat_A_ellip=0,
+                 f_min=0.0,
+                 f_max=np.inf,
+                 prior_run=False
              ))
         elif self.model == 'mchiq_exact':
              default.update(dict(
@@ -400,12 +414,16 @@ class Fit(object):
                 try:
                     return literal_eval(x)
                 except (TypeError,ValueError,SyntaxError):
-                    return x
+                    if x == "inf":
+                        return np.inf
+                    else:
+                        return x
+                    
         # create fit object
         fit = cls(config['model']['name'], modes=config['model']['modes'])
         # add priors
         prior = config['prior']
-        fit.update_prior(**{k: literal_eval(v) for k,v in prior.items()
+        fit.update_prior(**{k: try_parse(v) for k,v in prior.items()
                              if "drift" not in k})
         if 'data' not in config:
             # the rest of the options require loading data, so if no pointer to
@@ -669,29 +687,17 @@ class Fit(object):
         self.update_info('injection', no_noise=no_noise, **kws)
 
     DEF_RUN_KWS = dict(init='jitter+adapt_full', target_accept=0.9)
-    DEF_RUN_PRIOR_KWS = dict(var_names="unobserved_RVs")
+    
     def run(self, prior=False, suppress_warnings=True, store_residuals=True,
-            **kws):
+            min_ess=None, **kws):
         """Fit model.
 
-        Additional keyword arguments not listed below are passed to the
-        sampler, with the following defaults when sampling the posterior:
+        Additional keyword arguments not listed below are passed to the sampler,
+        with the following defaults when sampling:
 
         {}
 
         See docs for :func:`pymc.sample` to see all available options.
-
-        If sampling from the prior (``prior = True``), the default arguments
-        are:
-
-        {}
-        
-        In that case, if ``var_names = "unobserved_RVS"``, then the variables
-        sampled over will be the _unobserved_ variables defined in the model;
-        to also include observed variables, pass ``var_names = None``.
-
-        See docs for :func:`pymc.sample_prior_predictive` to see all_available
-        prior-sampling options.
 
         Arguments
         ---------
@@ -704,16 +710,24 @@ class Fit(object):
         store_residuals : bool
             compute whitened residuals point-wise and store in ``Fit.result``.
 
+        min_ess: number
+            if given, keep re-running the sampling with longer chains until the
+            minimum effective sample size exceeds `min_ess` (def. `None`).
+
         \*\*kws :
             arguments passed to sampler.
         """
+        ess_run = -1.0 #ess after sampling finishes, to be set by loop below
+        if min_ess is None:
+            min_ess = 0.0
+
         if not self.acfs:
             logging.warning("computing ACFs with default settings")
             self.compute_acfs()
 
         # ensure delta_t of ACFs is equal to delta_t of data
         for ifo in self.ifos:
-            if self.acfs[ifo].delta_t != self.data[ifo].delta_t:
+            if not np.isclose(self.acfs[ifo].delta_t, self.data[ifo].delta_t):
                 e = "{} ACF delta_t ({:.1e}) does not match data ({:.1e})."
                 raise AssertionError(e.format(ifo, self.acfs[ifo].delta_t,
                                           self.data[ifo].delta_t))
@@ -722,43 +736,57 @@ class Fit(object):
         filter = 'ignore' if suppress_warnings else 'default'
 
         # run keyword arguments
-        rkws = self.DEF_RUN_KWS.copy()
+        rkws = cp.deepcopy(self.DEF_RUN_KWS)
         rkws.update(kws)
-
-        # prior keyword arguments
-        pkws = self.DEF_RUN_PRIOR_KWS.copy()
-        pkws.update(kws)
 
         # run model and store
         logging.info('running {} (prior = {})'.format(self.model, prior))
         with warnings.catch_warnings():
             warnings.simplefilter(filter)
+            self.update_prior(prior_run=prior)
             with self.pymc_model:
-                if prior:
-                    # parse prior-specific kws
-                    if pkws['var_names'] == 'unobserved_RVs':
-                        # only sampled unobserved quantities
-                        # use PyMC utility to get the names
-                        prior_vars = pm.util.get_default_varnames(
-                              self.pymc_model.unobserved_RVs,
-                              include_transformed=True
-                        )
-                        pkws['var_names'] = {v.name for v in prior_vars}
-                    result = pm.sample_prior_predictive(**pkws)
-                    self.prior = az.convert_to_inference_data(result)
-                else:
+                while ess_run < min_ess:
+
+                    if not np.isscalar(min_ess):
+                        raise ValueError("min_ess is not a number")
+
                     result = pm.sample(**rkws)
-                    self.result = az.convert_to_inference_data(result)
-        if store_residuals:
+                    if prior:
+                        self.prior = az.convert_to_inference_data(result)
+                        ess = az.ess(self.prior)
+                    else:
+                        self.result = az.convert_to_inference_data(result)
+                        ess = az.ess(self.result)
+                    mess = ess.min()
+                    mess_arr = np.array([mess[k].values[()] for k in mess.keys()])
+                    ess_run = np.min(mess_arr)
+                    if ess_run < min_ess:
+                        tune = 2*kws.get('tune', 1000)
+                        draws = 2*kws.get('draws', 1000)
+                            
+                        logging.warning(f'min ess = {ess_run:.1f} below threshold {min_ess}')
+                        logging.warning(f'fitting again with {tune} tuning steps and {draws} samples')
+
+                        kws['tune'] = tune
+                        kws['draws'] = draws
+                        rkws.update(kws)
+
+        if not prior and store_residuals:
             self._generate_whitened_residuals()
-    run.__doc__ = run.__doc__.format(DEF_RUN_KWS, DEF_RUN_PRIOR_KWS)
+    run.__doc__ = run.__doc__.format(DEF_RUN_KWS)
 
     def _generate_whitened_residuals(self):
         # Adduct the whitened residuals to the result.
         residuals = {}
         residuals_stacked = {}
         for ifo in self.ifos:
-            ifo_key = bytes(str(ifo), 'utf-8') # IFO coordinates are bytestrings
+            if ifo in self.result.posterior.ifo:
+                ifo_key = ifo
+            elif bytes(str(ifo), 'utf-8') in self.result.posterior.ifo:
+                # IFO coordinates are bytestrings
+                ifo_key = bytes(str(ifo), 'utf-8') # IFO coordinates are bytestrings
+            else:
+                raise KeyError(f"IFO {ifo} is not a valid indexing ifo for the result posterior")
             r = self.result.observed_data[f'strain_{ifo}'] -\
                 self.result.posterior.h_det.loc[:,:,ifo_key,:]
             residuals[ifo] = r.transpose('chain', 'draw', 'time_index')

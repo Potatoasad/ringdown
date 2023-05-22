@@ -304,7 +304,7 @@ class Data(TimeSeries):
 
     def condition(self, t0=None, ds=None, flow=None, fhigh=None, trim=0.25,
                   digital_filter=False, remove_mean=True, decimate_kws=None,
-                  scipy_dec=None):
+                  scipy_dec=None, slice_left = None, slice_right = None):
         """Condition data.
 
         Arguments
@@ -328,12 +328,23 @@ class Data(TimeSeries):
         trim : float
             fraction of data to trim from edges after conditioning, to avoid
             spectral issues if filtering.
+        slice_left : float
+            number of seconds before t0 to slice the strain data, e.g. to avoid NaNs
+        slice_right : float
+            number of seconds after t0 to slice the strain data, e.g. to avoid NaNs
 
         Returns
         -------
         cond_data : Data
             conditioned data object.
         """
+        if slice_left is not None and slice_right is None:
+            self = self[t0-slice_left:]
+        elif slice_left is None and slice_right is not None:
+            self = self[:t0+slice_right]
+        elif slice_left is not None and slice_right is not None:
+            self = self[t0-slice_left:t0+slice_right]
+
         raw_data = self.values
         raw_time = self.index.values
 
@@ -423,7 +434,7 @@ class PowerSpectrum(FrequencySeries):
         return PowerSpectrum
 
     @classmethod
-    def from_data(cls, data, flow=None, smooth=False, **kws):
+    def from_data(cls, data, flow=None, fhigh=None, patch_level=None, **kws):
         """Estimate :class:`PowerSpectrum` from time domain data using Welch's
         method.
 
@@ -433,6 +444,10 @@ class PowerSpectrum(FrequencySeries):
             data time series.
         flow : float, None
             optional lower frequency at which to taper PSD via
+            :meth:`PowerSpectrum.flatten`. Defaults to None (i.e., no
+            flattening).
+        fhigh : float, None
+            optional higher frequency at which to taper PSD via
             :meth:`PowerSpectrum.flatten`. Defaults to None (i.e., no
             flattening).
         smooth : bool
@@ -450,8 +465,8 @@ class PowerSpectrum(FrequencySeries):
         kws['average'] = kws.get('average', 'median') # default to median-averaged, not mean-averaged to handle outliers.
         freq, psd = sig.welch(data, fs=fs, **kws)
         p = cls(psd, index=freq)
-        if flow:
-            p.flatten(flow, smooth=smooth, inplace=True)
+        if flow is not None or fhigh is not None:
+            p.flatten(flow=flow, fhigh=fhigh, patch_level=patch_level, inplace=True)
         return p
 
     @classmethod
@@ -495,37 +510,48 @@ class PowerSpectrum(FrequencySeries):
         # made up function to taper smoothly
         return psd_ref + psd_ref*(f_ref-f)*np.exp(-(f_ref-f))/3
 
-    def flatten(self, flow, smooth=False, inplace=False):
-        """Modify PSD at lower frequencies so that it flattens to a constant.
+    def flatten(self, flow, fhigh=None, patch_level=None, inplace=False):
+        """Modify PSD at low or high frequencies so that it flattens to a
+        constant.
 
         Arguments
         ---------
         flow : float
-            lower frequency threshold.
-        smooth : bool
-            flatten PSD smoothly at threshold with a soft tapering function.
-            Defaults to False.
+            low frequency threshold.
+        fhigh : float
+            high frequency threshold (def., `None`).
+        patch_level : float,tuple
+            value with which to patch PSD; if a tuple, then these ``(psd_low,
+            psd_high)`` values are used at the low and high ends respectively;
+            if a float, the same value is used in both ends; if `None`, will
+            patch with 10x the maximum PSD value in the respective patched
+            region.
         inplace : bool
-            modify PSD in place; otherwise, returns copy. Defaults to False.
+            modify PSD in place; otherwise, returns copy. Defaults to `False`.
 
         Returns
         -------
         psd : PowerSpectrum, None
             returns PSD only if not ``inplace``.
         """
-        freq = self.freq
-        if inplace:
-            psd = self
+        # copy array or operate in place
+        psd = self if inplace else self.copy()
+        # determine highest frequency
+        f = psd.freq
+        flow = max(flow or min(f), min(f))
+        fhigh = min(fhigh or max(f), max(f))
+        # create tuple (patch_level_low, patch_level_high)
+        if patch_level is None:
+            patch_level = (10*max(psd[f < flow]), 10*max(psd[f >= fhigh]))
         else:
-            psd = self.copy()
-        fref = freq[freq >= flow][0]
-        psd_ref = self[fref]
-        def get_low_freqs(f, smooth):
-            if smooth:
-                return self._pad_low_freqs(f, fref, psd_ref)
-            else:
-                return psd_ref
-        psd[freq < flow] = get_low_freqs(freq[freq < flow], smooth)
+            try:
+                patch_level[1]
+            except Exception:
+                patch_level = (patch_level, patch_level)
+        # patch low frequencies
+        psd[f < flow] = patch_level[0]
+        # patch high frequencies
+        psd[f > fhigh] = patch_level[1]
         if not inplace:
             return psd
 

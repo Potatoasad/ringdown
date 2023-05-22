@@ -115,9 +115,9 @@ def phiR_from_quadratures(Apx, Apy, Acx, Acy):
 def phiL_from_quadratures(Apx, Apy, Acx, Acy):
     return at.arctan2(-Acx - Apy, -Acy + Apx)
 
-def flat_A_quadratures_prior(Apx_unit, Apy_unit, Acx_unit, Acy_unit):
-    return 0.5*at.sum(at.square(Apx_unit) + at.square(Apy_unit) +
-                      at.square(Acx_unit) + at.square(Acy_unit))
+def flat_A_quadratures_prior(Apx_unit, Apy_unit, Acx_unit, Acy_unit,flat_A):
+    return 0.5*at.sum((at.square(Apx_unit) + at.square(Apy_unit) +
+                      at.square(Acx_unit) + at.square(Acy_unit))*flat_A)
 
 def make_mchi_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
                     **kwargs):
@@ -126,22 +126,50 @@ def make_mchi_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
     chi_min = kwargs.pop("chi_min")
     chi_max = kwargs.pop("chi_max")
     A_scale = kwargs.pop("A_scale")
+    df_min = kwargs.pop("df_min")
     df_max = kwargs.pop("df_max")
+    dtau_min = kwargs.pop("dtau_min")
     dtau_max = kwargs.pop("dtau_max")
     perturb_f = kwargs.pop("perturb_f", 0)
     perturb_tau = kwargs.pop("perturb_tau", 0)
     flat_A = kwargs.pop("flat_A", True)
     flat_A_ellip = kwargs.pop("flat_A_ellip", False)
+    f_min = kwargs.pop('f_min', None)
+    f_max = kwargs.pop('f_max', None)
+    prior_run = kwargs.pop('prior_run', False)
 
-    if flat_A and flat_A_ellip:
-        raise ValueError("at most one of `flat_A` and `flat_A_ellip` can be "
-                         "`True`")
+    nmode = f_coeffs.shape[0]
+
+    if np.isscalar(flat_A):
+        flat_A = np.repeat(flat_A,nmode)
+    if np.isscalar(flat_A_ellip):
+        flat_A_ellip = np.repeat(flat_A_ellip,nmode)
+    elif len(flat_A)!=nmode:
+        raise ValueError("flat_A must either be a scalar or array of length equal to the number of modes")
+    elif len(flat_A_ellip)!=nmode:
+        raise ValueError("flat_A_ellip must either be a scalar or array of length equal to the number of modes") 
+
+    if any(flat_A) and any(flat_A_ellip):
+        raise ValueError("at most one of `flat_A` and `flat_A_ellip` can have an element that is " "`True`")
     if (chi_min < 0) or (chi_max > 1):
         raise ValueError("chi boundaries must be contained in [0, 1)")
 
+    if not np.isscalar(df_min) and not np.isscalar(df_max):
+        if len(df_min)!=len(df_max):
+            raise ValueError("df_min, df_max must be scalar or arrays of length equal to the number of modes")
+        for el in np.arange(len(df_min)):
+            if df_min[el]==df_max[el]:
+                raise ValueError("df_min and df_max must not be equal for any given mode")
+
+    if not np.isscalar(dtau_min) and not np.isscalar(dtau_max):
+        if len(dtau_min)!=len(dtau_max):
+            raise ValueError("dtau_min, dtau_max must be scalar or arrays of length equal to the number of modes")
+        for el in np.arange(len(dtau_min)):
+            if dtau_min[el]==dtau_max[el]:
+                raise ValueError("dtau_min and dtau_max must not be equal for any given mode")
+
     ndet = len(t0)
     nt = len(times[0])
-    nmode = f_coeffs.shape[0]
 
     ifos = kwargs.pop('ifos', np.arange(ndet))
     modes = kwargs.pop('modes', np.arange(nmode))
@@ -165,8 +193,8 @@ def make_mchi_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
         Acx_unit = pm.Normal("Acx_unit", dims=['mode'])
         Acy_unit = pm.Normal("Acy_unit", dims=['mode'])
 
-        df = pm.Uniform("df", -df_max, df_max, dims=['mode'])
-        dtau = pm.Uniform("dtau", -dtau_max, dtau_max, dims=['mode'])
+        df = pm.Uniform("df", df_min, df_max, dims=['mode'])
+        dtau = pm.Uniform("dtau", dtau_min, dtau_max, dims=['mode'])
 
         Apx = pm.Deterministic("Apx", A_scale*Apx_unit, dims=['mode'])
         Apy = pm.Deterministic("Apy", A_scale*Apy_unit, dims=['mode'])
@@ -197,6 +225,12 @@ def make_mchi_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
         theta = pm.Deterministic("theta", -0.5*(phiR + phiL), dims=['mode'])
         phi = pm.Deterministic("phi", 0.5*(phiR - phiL), dims=['mode'])
 
+        # Check limits on f
+        if not np.isscalar(f_min) or not f_min == 0.0:
+            _ = pm.Potential('f_min_cut', at.sum(at.where(f < f_min, np.NINF, 0.0)))
+        if not np.isscalar(f_max) or not f_max == np.inf:
+            _ = pm.Potential('f_max_cut', at.sum(at.where(f > f_max, np.NINF, 0.0)))
+
         h_det_mode = pm.Deterministic("h_det_mode",
                 compute_h_det_mode(t0, times, Fps, Fcs, f, gamma,
                                    Apx, Apy, Acx, Acy),
@@ -209,32 +243,37 @@ def make_mchi_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs, g_coeffs,
         # Flat in M-chi already
 
         # Amplitude prior
-        if flat_A:
+        if any(flat_A):
             # bring us back to flat-in-quadratures
             pm.Potential("flat_A_quadratures_prior",
                          flat_A_quadratures_prior(Apx_unit, Apy_unit,
-                                                  Acx_unit, Acy_unit))
+                                                  Acx_unit, Acy_unit,flat_A))
             # bring us to flat-in-A prior
-            pm.Potential("flat_A_prior", -3*at.sum(at.log(A)))
-        elif flat_A_ellip:
+            pm.Potential("flat_A_prior", -3*at.sum(at.log(A)*flat_A))
+        elif any(flat_A_ellip):
             # bring us back to flat-in-quadratures
             pm.Potential("flat_A_quadratures_prior",
                          flat_A_quadratures_prior(Apx_unit, Apy_unit,
-                                                  Acx_unit, Acy_unit))
+                                                  Acx_unit, Acy_unit,flat_A_ellip))
             # bring us to flat-in-A and flat-in-ellip prior
             pm.Potential("flat_A_ellip_prior", 
-                         at.sum(-3*at.log(A) - at.log1m(at.square(ellip))))
+                         at.sum((-3*at.log(A) - at.log1m(at.square(ellip)))*flat_A_ellip))
 
         # Flat prior on the delta-fs and delta-taus
 
         # Likelihood:
-        for i in range(ndet):
-            key = ifos[i]
-            if isinstance(key, bytes):
-                # Don't want byte strings in our names!
-                key = key.decode('utf-8')
-            _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
+        if not prior_run:
+            for i in range(ndet):
+                key = ifos[i]
+                if isinstance(key, bytes):
+                 # Don't want byte strings in our names!
+                    key = key.decode('utf-8')
+                _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
                             observed=strains[i], dims=['time_index'])
+        else:
+            print("Sampling prior")
+            samp_prior_cond = pm.Potential('A_prior', at.sum(at.where(A > (10*A_scale or 1e-19), np.NINF, 0.0))) #this condition is to bound flat priors just for sampling from the prior
+
         
         return model
 
@@ -489,11 +528,22 @@ def make_mchi_aligned_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs,
     cosi_min = kwargs.pop("cosi_min")
     cosi_max = kwargs.pop("cosi_max")
     A_scale = kwargs.pop("A_scale")
+    df_min = kwargs.pop("df_min")
     df_max = kwargs.pop("df_max")
+    dtau_min = kwargs.pop("dtau_min")
     dtau_max = kwargs.pop("dtau_max")
     perturb_f = kwargs.pop("perturb_f", 0)
     perturb_tau = kwargs.pop("perturb_tau", 0)
     flat_A = kwargs.pop("flat_A", True)
+    f_min = kwargs.pop('f_min', 0.0)
+    f_max = kwargs.pop('f_max', np.inf)
+    nmode = f_coeffs.shape[0]
+    prior_run = kwargs.pop('prior_run',False)
+
+    if np.isscalar(flat_A):
+        flat_A = np.repeat(flat_A,nmode)
+    elif len(flat_A)!=nmode:
+        raise ValueError("flat_A must either be a scalar or array of length equal to the number of modes")
 
     if (cosi_min < -1) or (cosi_max > 1):
         raise ValueError("cosi boundaries must be contained in [-1, 1]")
@@ -502,7 +552,6 @@ def make_mchi_aligned_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs,
     
     ndet = len(t0)
     nt = len(times[0])
-    nmode = f_coeffs.shape[0]
 
     ifos = kwargs.pop('ifos', np.arange(ndet))
     modes = kwargs.pop('modes', np.arange(nmode))
@@ -526,8 +575,8 @@ def make_mchi_aligned_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs,
         Ax_unit = pm.Normal("Ax_unit", dims=['mode'])
         Ay_unit = pm.Normal("Ay_unit", dims=['mode'])
 
-        df = pm.Uniform("df", -df_max, df_max, dims=['mode'])
-        dtau = pm.Uniform("dtau", -dtau_max, dtau_max, dims=['mode'])
+        df = pm.Uniform("df", df_min, df_max, dims=['mode'])
+        dtau = pm.Uniform("dtau", dtau_min, dtau_max, dims=['mode'])
 
         A = pm.Deterministic("A",
             A_scale*at.sqrt(at.square(Ax_unit)+at.square(Ay_unit)),
@@ -548,6 +597,15 @@ def make_mchi_aligned_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs,
         Ac = pm.Deterministic('Ac', 2*cosi*A, dims=['mode'])
         ellip = pm.Deterministic('ellip', Ac/Ap, dims=['mode'])
 
+        # Check limits on f
+        if not np.isscalar(f_min) or not f_min == 0.0:
+            _ = pm.Potential('f_min_cut', at.sum(at.where(f < f_min, np.NINF, 0.0)))
+            print("Running with f_min_cut on modes:",f_min)
+        if not np.isscalar(f_max) or not f_max == np.inf:
+            _ = pm.Potential('f_max_cut', at.sum(at.where(f > f_max, np.NINF, 0.0)))
+            print("Running with f_max_cut on modes:",f_max)
+
+
         Apx = (1 + at.square(cosi))*A*at.cos(phi)
         Apy = (1 + at.square(cosi))*A*at.sin(phi)
         Acx = -2*cosi*A*at.sin(phi)
@@ -565,23 +623,27 @@ def make_mchi_aligned_model(t0, times, strains, Ls, Fps, Fcs, f_coeffs,
         # Flat in M-chi already
 
         # Amplitude prior
-        if flat_A:
+        if any(flat_A):
             # first bring us to flat in quadratures
             pm.Potential("flat_A_quadratures_prior",
-                         0.5*at.sum(at.square(Ax_unit) + at.square(Ay_unit)))
+                         0.5*at.sum((at.square(Ax_unit) + at.square(Ay_unit))*flat_A))
             # now to flat in A
-            pm.Potential("flat_A_prior", -at.sum(at.log(A)))
+            pm.Potential("flat_A_prior", -at.sum(at.log(A)*flat_A))
 
         # Flat prior on the delta-fs and delta-taus
 
         # Likelihood
-        for i in range(ndet):
-            key = ifos[i]
-            if isinstance(key, bytes):
-                # Don't want byte strings in our names!
-                key = key.decode('utf-8')
-            _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
+        if not prior_run:
+            for i in range(ndet):
+                key = ifos[i]
+                if isinstance(key, bytes):
+                    # Don't want byte strings in our names!
+                    key = key.decode('utf-8')
+                _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
                             observed=strains[i], dims=['time_index'])
+        else:
+            print("Sampling prior")
+            samp_prior_cond = pm.Potential('A_prior', at.sum(at.where(A > (10*A_scale or 1e-19), np.NINF, 0.0))) #this condition is to bound flat priors just for sampling from the prior
         
         return model
 
@@ -596,6 +658,12 @@ def make_ftau_model(t0, times, strains, Ls, **kwargs):
     A_scale = kwargs.pop("A_scale")
     flat_A = kwargs.pop("flat_A", True)
     nmode = kwargs.pop("nmode", 1)
+    prior_run = kwargs.pop('prior_run', False)
+
+    if np.isscalar(flat_A):
+        flat_A = np.repeat(flat_A,nmode)
+    elif len(flat_A)!=nmode:
+        raise ValueError("flat_A must either be a scalar or array of length equal to the number of modes")
 
     ndet = len(t0)
     nt = len(times[0])
@@ -646,22 +714,26 @@ def make_ftau_model(t0, times, strains, Ls, **kwargs):
         # Flat in M-chi already
 
         # Amplitude prior
-        if flat_A:
+        if any(flat_A):
             # first bring us to flat in quadratures
             pm.Potential("flat_A_quadratures_prior",
-                         0.5*at.sum(at.square(Ax_unit) + at.square(Ay_unit)))
-            pm.Potential("flat_A_prior", -at.sum(at.log(A)))
+                         0.5*at.sum((at.square(Ax_unit) + at.square(Ay_unit))*flat_A))
+            pm.Potential("flat_A_prior", -at.sum(at.log(A)*flat_A))
 
         # Flat prior on the delta-fs and delta-taus
 
         # Likelihood
-        for i in range(ndet):
-            key = ifos[i]
-            if isinstance(key, bytes):
+        if not prior_run:
+            for i in range(ndet):
+                key = ifos[i]
+                if isinstance(key, bytes):
                 # Don't want byte strings in our names!
-                key = key.decode('utf-8')
-            _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
+                   key = key.decode('utf-8')
+                _ = pm.MvNormal(f"strain_{key}", mu=h_det[i,:], chol=Ls[i],
                             observed=strains[i], dims=['time_index'])
+        else:
+            print("Sampling prior")
+            samp_prior_cond = pm.Potential('A_prior', at.sum(at.where(A > (10*A_scale or 1e-19), np.NINF, 0.0))) #this condition is to bound flat priors just for sampling from the prior
         
         return model
 
